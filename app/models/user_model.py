@@ -3,11 +3,12 @@ from datetime import datetime
 from enum import Enum
 import uuid
 from sqlalchemy import (
-    Column, String, Integer, DateTime, Boolean, func, Enum as SQLAlchemyEnum
+    Column, String, Integer, DateTime, Boolean, func, Enum as SQLAlchemyEnum, ForeignKey
 )
 from sqlalchemy.dialects.postgresql import UUID, ENUM
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
+
 
 class UserRole(Enum):
     """Enumeration of user roles within the application, stored as ENUM in the database."""
@@ -15,6 +16,7 @@ class UserRole(Enum):
     AUTHENTICATED = "AUTHENTICATED"
     MANAGER = "MANAGER"
     ADMIN = "ADMIN"
+
 
 class User(Base):
     """
@@ -62,9 +64,23 @@ class User(Base):
     profile_picture_url: Mapped[str] = Column(String(255), nullable=True)
     linkedin_profile_url: Mapped[str] = Column(String(255), nullable=True)
     github_profile_url: Mapped[str] = Column(String(255), nullable=True)
+
+    # NEW: optional location field
+    location: Mapped[str] = Column(String(120), nullable=True)
+
     role: Mapped[UserRole] = Column(SQLAlchemyEnum(UserRole, name='UserRole', create_constraint=True), nullable=False)
     is_professional: Mapped[bool] = Column(Boolean, default=False)
     professional_status_updated_at: Mapped[datetime] = Column(DateTime(timezone=True), nullable=True)
+
+    # NEW: who upgraded this user to pro (self-referencing FK)
+    pro_upgraded_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True
+    )
+    # Optional convenience relationship to the actor
+    upgraded_by_user = relationship("User", remote_side="User.id", uselist=False)
+
     last_login_at: Mapped[datetime] = Column(DateTime(timezone=True), nullable=True)
     failed_login_attempts: Mapped[int] = Column(Integer, default=0)
     is_locked: Mapped[bool] = Column(Boolean, default=False)
@@ -73,7 +89,6 @@ class User(Base):
     verification_token = Column(String, nullable=True)
     email_verified: Mapped[bool] = Column(Boolean, default=False, nullable=False)
     hashed_password: Mapped[str] = Column(String(255), nullable=False)
-
 
     def __repr__(self) -> str:
         """Provides a readable representation of a user object."""
