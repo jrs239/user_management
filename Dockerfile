@@ -26,6 +26,7 @@ RUN python -m venv /.venv \
 
 # Define a second stage for the runtime, using the slim image
 FROM python:3.12-slim-bookworm AS final
+RUN apt-get update && apt-get install -y --only-upgrade libc-bin && rm -rf /var/lib/apt/lists/*
 
 # (Optional) keep libc up to date without pinning a specific version
 RUN apt-get update \
