@@ -1,61 +1,58 @@
-# Define a base stage with a Debian Bookworm base image that includes the latest glibc update
-FROM python:3.12-bookworm AS base
+# syntax=docker/dockerfile:1.7
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONFAULTHANDLER=1 \
-    PIP_NO_CACHE_DIR=true \
-    PIP_DEFAULT_TIMEOUT=100 \
-    PIP_DISABLE_PIP_VERSION_CHECK=on \
-    QR_CODE_DIR=/myapp/qr_codes
+############################
+# Build stage
+############################
+FROM python:3.12-bookworm AS build
 
-WORKDIR /myapp
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=on
 
-# Build deps only in base image
-RUN apt-get update && apt-get install -y --no-install-recommends \
+WORKDIR /app
+
+# Build requirements (compiler, pg headers) – only in build stage
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
  && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies in a virtualenv
+# Install Python deps into a self-contained virtualenv
 COPY requirements.txt .
-RUN python -m venv /.venv \
-    && . /.venv/bin/activate \
-    && pip install --upgrade pip \
-    && pip install -r requirements.txt
+RUN python -m venv /opt/venv \
+ && /opt/venv/bin/pip install --upgrade pip \
+ && /opt/venv/bin/pip install -r requirements.txt
 
-# Define a second stage for the runtime, using the slim image
+
+############################
+# Runtime stage
+############################
 FROM python:3.12-slim-bookworm AS final
-RUN apt-get update && apt-get install -y --only-upgrade libc-bin && rm -rf /var/lib/apt/lists/*
 
-# (Optional) keep libc up to date without pinning a specific version
+# Keep libc/glibc up to date (no version pin -> no downgrades)
 RUN apt-get update \
-    && apt-get install -y --only-upgrade libc-bin \
-    && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends --only-upgrade libc-bin \
+ && rm -rf /var/lib/apt/lists/*
 
-# Copy the virtual environment from the base stage
-COPY --from=base /.venv /.venv
-
-# Ensure all python commands run inside the virtual environment
-ENV PATH="/.venv/bin:$PATH" \
+# Use the venv from the build stage
+COPY --from=build /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONFAULTHANDLER=1 \
-    QR_CODE_DIR=/myapp/qr_codes
+    QR_CODE_DIR=/app/qr_codes
 
-# Set the working directory
-WORKDIR /myapp
+WORKDIR /app
 
-# Create and switch to a non-root user
-# (tries useradd; falls back to adduser if needed)
-RUN useradd -m myuser || adduser --disabled-password --gecos "" myuser
-USER myuser
+# Non-root user
+RUN useradd -m -u 1000 appuser
+USER appuser
 
-# Copy application code with appropriate ownership
-COPY --chown=myuser:myuser . .
+# App source
+COPY --chown=appuser:appuser . .
 
-# Inform Docker that the container listens on the specified port at runtime.
 EXPOSE 8000
 
-# Use ENTRYPOINT to specify the executable when the container starts.
-# NOTE: --reload is for development; remove in production if you want a stable server process
-ENTRYPOINT ["uvicorn", "app.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+# Production server (remove --reload)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
