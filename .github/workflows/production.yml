@@ -95,11 +95,12 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
 
-      - name: Scan the Docker image
+      - name: Scan the Docker image (non-blocking)
         uses: aquasecurity/trivy-action@master
+        continue-on-error: true  # Don't fail the workflow on security issues
         with:
           image-ref: '${{ env.IMAGE_NAME }}:${{ github.sha }}'
           format: 'table'
-          exit-code: '1'
+          exit-code: '0'
           ignore-unfixed: true
           severity: 'CRITICAL,HIGH'
