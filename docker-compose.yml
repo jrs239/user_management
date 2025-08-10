@@ -1,5 +1,4 @@
 version: '3.8'
-
 services:
   postgres:
     image: postgres:16.2
@@ -14,7 +13,6 @@ services:
       retries: 5
     networks:
       - app-network
-
   pgadmin:
     image: dpage/pgadmin4
     environment:
@@ -29,9 +27,12 @@ services:
       - pgadmin-data:/var/lib/pgadmin
     networks:
       - app-network
-
   fastapi:
     build: .
+    env_file:
+      - .env
+    environment:
+      - database_url=postgresql+asyncpg://user:password@postgres:5432/myappdb
     volumes:
       - ./:/myapp/
     depends_on:
@@ -39,7 +40,6 @@ services:
         condition: service_healthy
     networks:
       - app-network
-
   nginx:
     image: nginx:latest
     ports:
@@ -50,10 +50,8 @@ services:
       - fastapi
     networks:
       - app-network
-
 volumes:
   postgres-data:
   pgadmin-data:
-
 networks:
   app-network:
