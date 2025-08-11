@@ -365,10 +365,7 @@ class UserService:
             # Best-effort email (don't fail upgrade if email fails)
             try:
                 if hasattr(email_service, "send_pro_upgrade_notice"):
-                    await email_service.send_pro_upgrade_notice(
-                        email=user.email,
-                        first_name=getattr(user, "first_name", None)
-                    )
+                    await email_service.send_pro_upgrade_notice(user)
             except Exception as e:
                 logger.warning(f"send_pro_upgrade_notice failed (ignored): {e}")
 

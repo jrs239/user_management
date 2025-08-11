@@ -1,23 +1,3 @@
-"""
-This Python file is part of a FastAPI application, demonstrating user management functionalities including creating, reading,
-updating, and deleting (CRUD) user information. It uses OAuth2 with Password Flow for security, ensuring that only authenticated
-users can perform certain operations. Additionally, the file showcases the integration of FastAPI with SQLAlchemy for asynchronous
-database operations, enhancing performance by non-blocking database calls.
-
-The implementation emphasizes RESTful API principles, with endpoints for each CRUD operation and the use of HTTP status codes
-and exceptions to communicate the outcome of operations. It introduces the concept of HATEOAS (Hypermedia as the Engine of
-Application State) by including navigational links in API responses, allowing clients to discover other related operations dynamically.
-
-OAuth2PasswordBearer is employed to extract the token from the Authorization header and verify the user's identity, providing a layer
-of security to the operations that manipulate user data.
-
-Key Highlights:
-- Use of FastAPI's Dependency Injection system to manage database sessions and user authentication.
-- Demonstrates how to perform CRUD operations in an asynchronous manner using SQLAlchemy with FastAPI.
-- Implements HATEOAS by generating dynamic links for user-related actions, enhancing API discoverability.
-- Utilizes OAuth2PasswordBearer for securing API endpoints, requiring valid access tokens for operations.
-"""
-
 from builtins import dict, int, len, str
 from datetime import timedelta
 from uuid import UUID
@@ -26,12 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_current_user, get_db, get_email_service, require_role
-from app.schemas.pagination_schema import EnhancedPagination
+from app.dependencies import get_current_user, get_db, get_email_service, require_role, get_settings
 from app.schemas.token_schema import TokenResponse
 from app.schemas.user_schemas import (
-    LoginRequest,
-    UserBase,
     UserCreate,
     UserListResponse,
     UserResponse,
@@ -41,11 +18,11 @@ from app.schemas.user_schemas import (
 from app.services.user_service import UserService
 from app.services.jwt_service import create_access_token
 from app.utils.link_generation import create_user_links, generate_pagination_links
-from app.dependencies import get_settings
 from app.services.email_service import EmailService
 
 router = APIRouter()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+# keep this consistent with dependencies.py
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login/")
 settings = get_settings()
 
 
@@ -97,6 +74,7 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     token: str = Depends(oauth2_scheme),
     current_user: dict = Depends(require_role(["ADMIN", "MANAGER"])),
+
 ):
     user_data = user_update.model_dump(exclude_unset=True)
     updated_user = await UserService.update(db, user_id, user_data)
@@ -153,6 +131,7 @@ async def create_user(
     email_service: EmailService = Depends(get_email_service),
     token: str = Depends(oauth2_scheme),
     current_user: dict = Depends(require_role(["ADMIN", "MANAGER"])),
+
 ):
     existing_user = await UserService.get_by_email(db, user.email)
     if existing_user:
@@ -189,6 +168,7 @@ async def list_users(
     limit: int = 10,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_role(["ADMIN", "MANAGER"])),
+
 ):
     total_users = await UserService.count(db)
     users = await UserService.list_users(db, skip, limit)
@@ -217,7 +197,6 @@ async def register(
     raise HTTPException(status_code=400, detail="Email already exists")
 
 
-# 🔥 keep ONLY ONE login endpoint
 @router.post("/login/", response_model=TokenResponse, tags=["Login and Registration"])
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -229,34 +208,35 @@ async def login(
     user = await UserService.login_user(session, form_data.username, form_data.password)
     if user:
         access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+        # include "id" so get_current_user can read it
         access_token = create_access_token(
-            data={"sub": user.email, "role": str(user.role.name)},
+            data={"sub": user.email, "id": str(user.id), "role": str(user.role.name)},
             expires_delta=access_token_expires,
         )
         return {"access_token": access_token, "token_type": "bearer"}
     raise HTTPException(status_code=401, detail="Incorrect email or password.")
 
 
-@router.get(
-    "/verify-email/{user_id}/{token}",
-    status_code=status.HTTP_200_OK,
-    name="verify_email",
-    tags=["Login and Registration"],
-)
-async def verify_email(
-    user_id: UUID,
-    token: str,
-    db: AsyncSession = Depends(get_db),
-    email_service: EmailService = Depends(get_email_service),
-):
-    if await UserService.verify_email_with_token(db, user_id, token):
-        return {"message": "Email verified successfully"}
-    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification token")
-
-
 # ----------------------------
-# ✔ NEW: Profile + Pro Upgrade
+# Profile + Pro Upgrade
 # ----------------------------
+
+from uuid import UUID as _UUID_type
+from app.services.user_service import UserService as _USvc
+
+async def _resolve_actor_uuid(db: AsyncSession, principal: dict) -> _UUID_type:
+    raw = principal.get("id") or principal.get("user_id")
+    if not raw:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    try:
+        return _UUID_type(str(raw))
+    except Exception:
+        # treat as email and resolve
+        user = await _USvc.get_by_email(db, str(raw))
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid token principal")
+        return user.id
+
 
 @router.patch("/users/me", response_model=dict, tags=["User Profile"])
 async def update_my_profile(
@@ -264,12 +244,15 @@ async def update_my_profile(
     db: AsyncSession = Depends(get_db),
     me: dict = Depends(get_current_user),
 ):
+    actor_uuid = await _resolve_actor_uuid(db, me)
     updated = await UserService.update_profile(
         session=db,
-        target_user_id=me["id"] if isinstance(me, dict) else me.id,
+        actor_id=actor_uuid,
+        target_id=actor_uuid,
         payload=payload,
-        acting_user=me,
     )
+    if not updated:
+        raise HTTPException(status_code=400, detail="Unable to update profile")
     return {"message": "Profile updated", "user_id": str(updated.id)}
 
 
@@ -284,12 +267,15 @@ async def admin_update_profile(
     db: AsyncSession = Depends(get_db),
     admin: dict = Depends(require_role(["ADMIN", "MANAGER"])),
 ):
+    actor_uuid = await _resolve_actor_uuid(db, admin)
     updated = await UserService.update_profile(
         session=db,
-        target_user_id=user_id,
+        actor_id=actor_uuid,
+        target_id=user_id,
         payload=payload,
-        acting_user=admin,
     )
+    if not updated:
+        raise HTTPException(status_code=400, detail="Unable to update profile")
     return {"message": "Profile updated", "user_id": str(updated.id)}
 
 
@@ -304,12 +290,15 @@ async def admin_upgrade_to_pro(
     admin: dict = Depends(require_role(["ADMIN", "MANAGER"])),
     email_service: EmailService = Depends(get_email_service),
 ):
+    actor_uuid = await _resolve_actor_uuid(db, admin)
     upgraded_user = await UserService.upgrade_to_pro(
         session=db,
-        target_user_id=user_id,
-        acting_user=admin,
+        actor_id=actor_uuid,
+        target_id=user_id,
+        email_service=email_service,
     )
-    await email_service.send_pro_upgrade_notice(upgraded_user)
+    if not upgraded_user:
+        raise HTTPException(status_code=400, detail="Unable to upgrade user")
     return {
         "message": "User upgraded to professional",
         "user_id": str(upgraded_user.id),
