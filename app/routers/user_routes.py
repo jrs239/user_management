@@ -36,7 +36,7 @@ from app.schemas.user_schemas import (
     UserListResponse,
     UserResponse,
     UserUpdate,
-    UserProfileUpdate,  # ✔ added
+    UserProfileUpdate,
 )
 from app.services.user_service import UserService
 from app.services.jwt_service import create_access_token
@@ -62,9 +62,6 @@ async def get_user(
     token: str = Depends(oauth2_scheme),
     current_user: dict = Depends(require_role(["ADMIN", "MANAGER"])),
 ):
-    """
-    Endpoint to fetch a user by their unique identifier (UUID).
-    """
     user = await UserService.get_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -101,9 +98,6 @@ async def update_user(
     token: str = Depends(oauth2_scheme),
     current_user: dict = Depends(require_role(["ADMIN", "MANAGER"])),
 ):
-    """
-    Update user information.
-    """
     user_data = user_update.model_dump(exclude_unset=True)
     updated_user = await UserService.update(db, user_id, user_data)
     if not updated_user:
@@ -139,9 +133,6 @@ async def delete_user(
     token: str = Depends(oauth2_scheme),
     current_user: dict = Depends(require_role(["ADMIN", "MANAGER"])),
 ):
-    """
-    Delete a user by their ID.
-    """
     success = await UserService.delete(db, user_id)
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -163,9 +154,6 @@ async def create_user(
     token: str = Depends(oauth2_scheme),
     current_user: dict = Depends(require_role(["ADMIN", "MANAGER"])),
 ):
-    """
-    Create a new user.
-    """
     existing_user = await UserService.get_by_email(db, user.email)
     if existing_user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists")
@@ -229,6 +217,7 @@ async def register(
     raise HTTPException(status_code=400, detail="Email already exists")
 
 
+# 🔥 keep ONLY ONE login endpoint
 @router.post("/login/", response_model=TokenResponse, tags=["Login and Registration"])
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -260,9 +249,6 @@ async def verify_email(
     db: AsyncSession = Depends(get_db),
     email_service: EmailService = Depends(get_email_service),
 ):
-    """
-    Verify user's email with a provided token.
-    """
     if await UserService.verify_email_with_token(db, user_id, token):
         return {"message": "Email verified successfully"}
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification token")
@@ -272,19 +258,12 @@ async def verify_email(
 # ✔ NEW: Profile + Pro Upgrade
 # ----------------------------
 
-@router.patch(
-    "/users/me",
-    response_model=dict,
-    tags=["User Profile"],
-)
+@router.patch("/users/me", response_model=dict, tags=["User Profile"])
 async def update_my_profile(
     payload: UserProfileUpdate,
     db: AsyncSession = Depends(get_db),
     me: dict = Depends(get_current_user),
 ):
-    """
-    Update the authenticated user's own profile.
-    """
     updated = await UserService.update_profile(
         session=db,
         target_user_id=me["id"] if isinstance(me, dict) else me.id,
@@ -305,9 +284,6 @@ async def admin_update_profile(
     db: AsyncSession = Depends(get_db),
     admin: dict = Depends(require_role(["ADMIN", "MANAGER"])),
 ):
-    """
-    Admin/Manager can update any user's profile.
-    """
     updated = await UserService.update_profile(
         session=db,
         target_user_id=user_id,
@@ -328,18 +304,12 @@ async def admin_upgrade_to_pro(
     admin: dict = Depends(require_role(["ADMIN", "MANAGER"])),
     email_service: EmailService = Depends(get_email_service),
 ):
-    """
-    Admin/Manager marks a user as Professional and sends an email notice.
-    """
     upgraded_user = await UserService.upgrade_to_pro(
         session=db,
         target_user_id=user_id,
         acting_user=admin,
     )
-
-    # Notify the user
     await email_service.send_pro_upgrade_notice(upgraded_user)
-
     return {
         "message": "User upgraded to professional",
         "user_id": str(upgraded_user.id),

@@ -1,5 +1,6 @@
-# email_service.py
+# app/services/email_service.py
 from builtins import ValueError, dict, str
+from typing import Optional
 from settings.config import settings
 from app.utils.smtp_connection import SMTPClient
 from app.utils.template_manager import TemplateManager
@@ -26,6 +27,7 @@ class EmailService:
             raise ValueError("Invalid email type")
 
         html_content = self.template_manager.render_template(email_type, **user_data)
+        # use smtp_client directly (there is no self.send_email here)
         self.smtp_client.send_email(subject_map[email_type], html_content, user_data['email'])
 
     async def send_verification_email(self, user: User):
@@ -36,11 +38,12 @@ class EmailService:
             "email": user.email
         }, 'email_verification')
 
-    async def send_pro_upgrade_notice(self, user: User) -> None:
+    async def send_pro_upgrade_notice(self, user: User, cc: Optional[list[str]] = None) -> None:
         """
         Notify the user they were upgraded to Professional.
         """
         subject = "You're now a Professional user 🎉"
+        # Keep it simple text; your SMTPClient already handles sending
         body = (
             f"Hi {user.first_name or 'there'},\n\n"
             "Good news — your account has been upgraded to Professional.\n"
@@ -48,4 +51,5 @@ class EmailService:
             "If you have any questions, just reply to this email.\n\n"
             "— The Team"
         )
-        await self.send_email(to=user.email, subject=subject, body=body)
+        # send via SMTPClient (no self.send_email method exists in this class)
+        self.smtp_client.send_email(subject, body, user.email, cc=cc)
