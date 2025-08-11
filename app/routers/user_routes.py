@@ -292,7 +292,7 @@ async def register(
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists")
 
 
-@router.post("/login", response_model=TokenResponse, tags=["Login and Registration"])
+@router.post("/login/", response_model=TokenResponse, tags=["Login and Registration"])
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     session: AsyncSession = Depends(get_db),
