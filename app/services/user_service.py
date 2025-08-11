@@ -14,6 +14,7 @@ from app.schemas.user_schemas import UserCreate, UserUpdate
 from app.utils.nickname_gen import generate_nickname
 from app.utils.security import generate_verification_token, hash_password, verify_password
 from app.services.email_service import EmailService
+from typing import TYPE_CHECKING
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -299,3 +300,16 @@ class UserService:
             logger.error(f"Error unlocking user {user_id}: {e}")
             await session.rollback()
             return False
+
+    @staticmethod
+    async def change_role(db: "AsyncSession", user_id: "UUID", new_role: "UserRole"):
+        """
+        Change a user's role. Returns the updated user or None if not found.
+        """
+        user = await UserService.get_by_id(db, user_id)
+        if not user:
+            return None
+        user.role = new_role
+        await db.commit()
+        await db.refresh(user)
+        return user

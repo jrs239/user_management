@@ -18,11 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db, get_email_service, require_role, get_settings
 from app.schemas.token_schema import TokenResponse
-from app.schemas.user_schemas import UserCreate, UserListResponse, UserResponse, UserUpdate
+from app.schemas.user_schemas import UserCreate, UserListResponse, UserResponse, UserUpdate, RoleChangeRequest
 from app.services.user_service import UserService
 from app.services.jwt_service import create_access_token
 from app.utils.link_generation import create_user_links, generate_pagination_links
 from app.services.email_service import EmailService
+from app.models.user_model import UserRole
 
 router = APIRouter()
 # Align tokenUrl with the actual path below ("/login/")
@@ -42,7 +43,6 @@ async def _resolve_user_from_context(db: AsyncSession, current_user: Any):
       - UUID-like id/user_id -> get_by_id
       - email-like sub/email -> get_by_email
     """
-    # 1) Extract possible identifiers
     uid = None
     email = None
 
@@ -53,16 +53,13 @@ async def _resolve_user_from_context(db: AsyncSession, current_user: Any):
         uid = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
         email = getattr(current_user, "email", None) or getattr(current_user, "sub", None)
 
-    # 2) Try by id first (if it looks like a UUID)
     user = None
     if uid:
         try:
-            # Allow passing UUID or string UUID
             user = await UserService.get_by_id(db, UUID(str(uid)))
         except Exception:
             user = None
 
-    # 3) Fallback to email (common "sub" in JWT is email)
     if not user and email and "@" in str(email):
         user = await UserService.get_by_email(db, str(email))
 
@@ -84,7 +81,6 @@ def _normalize_patch_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "displayName": "nickname",
         "avatar_url": "profile_picture_url",
         "profilePictureUrl": "profile_picture_url",
-        # pass-throughs below will be handled as-is if in allowed
     }
 
     allowed = {
@@ -123,6 +119,21 @@ def _to_user_response(user, request: Optional[Request] = None) -> UserResponse:
         updated_at=user.updated_at,
         links=create_user_links(user.id, request) if request is not None else None,
     )
+
+
+def _actor_role_name(current_user: Any) -> str:
+    """
+    Returns 'ADMIN' | 'MANAGER' | 'AUTHENTICATED' (or similar) from current_user,
+    whether it's a dict payload or an object. Falls back to string form.
+    """
+    if isinstance(current_user, dict):
+        raw = current_user.get("role") or current_user.get("role_name")
+    else:
+        raw = getattr(current_user, "role", None) or getattr(current_user, "role_name", None)
+    if raw is None:
+        return ""
+    name = getattr(raw, "name", None)
+    return (name or str(raw)).upper()
 
 
 # ---------------------------
@@ -287,7 +298,6 @@ async def register(
 ):
     user = await UserService.register_user(session, user_data.model_dump(), email_service)
     if user:
-        # user may already be a schema depending on implementation; adapt if needed
         return _to_user_response(user)
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists")
 
@@ -309,3 +319,46 @@ async def login(
         )
         return {"access_token": access_token, "token_type": "bearer"}
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password.")
+
+
+@router.patch(
+    "/users/{user_id}/role",
+    response_model=UserResponse,
+    tags=["User Management Requires (Admin or Manager Roles)"],
+)
+async def change_user_role(
+    user_id: UUID,
+    payload: RoleChangeRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+    current_user: Any = Depends(require_role(["ADMIN", "MANAGER"])),
+):
+    """
+    Change a user's role.
+
+    Rules:
+    - ADMIN can assign any role.
+    - MANAGER cannot assign ADMIN, and cannot change users who are ADMIN.
+    """
+    target = await UserService.get_by_id(db, user_id)
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    actor_role = _actor_role_name(current_user)
+    new_role: UserRole = payload.role
+
+    if actor_role == "MANAGER":
+        if new_role == UserRole.ADMIN:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Managers cannot assign ADMIN role")
+        if target.role == UserRole.ADMIN:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Managers cannot change ADMIN users")
+
+    if target.role == new_role:
+        return _to_user_response(target, request)
+
+    updated = await UserService.change_role(db, target.id, new_role)
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    return _to_user_response(updated, request)
