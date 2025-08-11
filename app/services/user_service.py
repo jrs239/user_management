@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_settings
 from app.models.user_model import User, UserRole
-from app.schemas.user_schemas import UserCreate, UserUpdate
+from app.schemas.user_schemas import UserCreate, UserUpdate, UserProfileUpdate  # ← added
 from app.utils.nickname_gen import generate_nickname
 from app.utils.security import generate_verification_token, hash_password, verify_password
 from app.services.email_service import EmailService
@@ -275,6 +275,115 @@ class UserService:
         session.add(user)
         await session.commit()
         return True
+
+    # ---------------------------
+    # Profile & Pro (NEW)
+    # ---------------------------
+    @classmethod
+    async def update_profile(
+        cls,
+        session: AsyncSession,
+        actor_id: UUID,
+        target_id: UUID,
+        payload: UserProfileUpdate
+    ) -> Optional[User]:
+        """
+        Update profile fields (first_name, last_name, bio, location).
+        - Self can update self.
+        - Admin/Manager can update anyone.
+        """
+        try:
+            if actor_id != target_id:
+                actor = await cls.get_by_id(session, actor_id)
+                if actor is None or actor.role not in {UserRole.ADMIN, UserRole.MANAGER}:
+                    raise PermissionError("Forbidden")
+
+            data = payload.model_dump(exclude_unset=True)
+            if not data:
+                return await cls.get_by_id(session, target_id)
+
+            stmt = (
+                update(User)
+                .where(User.id == target_id)
+                .values(**data)
+                .returning(User)
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            updated = result.scalar_one_or_none()
+            if updated:
+                await session.refresh(updated)
+            return updated
+
+        except PermissionError:
+            raise
+        except SQLAlchemyError as e:
+            logger.error(f"DB error during profile update: {e}")
+            await session.rollback()
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during profile update: {e}")
+            await session.rollback()
+            return None
+
+    @classmethod
+    async def upgrade_to_pro(
+        cls,
+        session: AsyncSession,
+        actor_id: UUID,
+        target_id: UUID,
+        email_service: EmailService
+    ) -> Optional[User]:
+        """
+        Upgrade a user to professional status.
+        - Only Admin/Manager can perform.
+        - Sets is_professional=True, professional_status_updated_at=now, pro_upgraded_by=actor_id
+        - Sends notification email (best-effort).
+        """
+        try:
+            actor = await cls.get_by_id(session, actor_id)
+            if actor is None or actor.role not in {UserRole.ADMIN, UserRole.MANAGER}:
+                raise PermissionError("Forbidden")
+
+            now = datetime.now(timezone.utc)
+            stmt = (
+                update(User)
+                .where(User.id == target_id)
+                .values(
+                    is_professional=True,
+                    professional_status_updated_at=now,
+                    pro_upgraded_by=actor_id
+                )
+                .returning(User)
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            user = result.scalar_one_or_none()
+            if not user:
+                return None
+
+            # Best-effort email (don't fail upgrade if email fails)
+            try:
+                if hasattr(email_service, "send_pro_upgrade_notice"):
+                    await email_service.send_pro_upgrade_notice(
+                        email=user.email,
+                        first_name=getattr(user, "first_name", None)
+                    )
+            except Exception as e:
+                logger.warning(f"send_pro_upgrade_notice failed (ignored): {e}")
+
+            return user
+
+        except PermissionError:
+            raise
+        except SQLAlchemyError as e:
+            logger.error(f"DB error during pro upgrade: {e}")
+            await session.rollback()
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during pro upgrade: {e}")
+            await session.rollback()
+            return None
 
     # ---------------------------
     # Utility
