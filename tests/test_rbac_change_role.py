@@ -1,41 +1,52 @@
-from app.models.user_model import UserRole
+import pytest
 
-PASSWORD = "MySuperPassword$1234"  # same default used by the other tests/fixtures
+pytestmark = pytest.mark.asyncio
 
-def _auth_headers(client, email: str, password: str):
-    """Log in and return Authorization headers."""
-    r = client.post("/login/", data={"username": email, "password": password})
-    assert r.status_code == 200, f"login failed for {email}: {r.status_code} {r.text}"
-    token = r.json()["access_token"]
+def _headers(token: str):
     return {"Authorization": f"Bearer {token}"}
 
-def test_admin_can_change_any_role(client, admin_user, user):
+async def test_admin_can_change_any_role(async_client, admin_token, user):
     """ADMIN can assign any role (e.g., set AUTHENTICATED user -> MANAGER)."""
-    headers = _auth_headers(client, admin_user.email, PASSWORD)
-    r = client.patch(f"/users/{user.id}/role", json={"role": "MANAGER"}, headers=headers)
+    r = await async_client.patch(
+        f"/users/{user.id}/role",
+        json={"role": "MANAGER"},
+        headers=_headers(admin_token),
+    )
     assert r.status_code == 200
-    # be tolerant of how role is serialized in the response
     assert "MANAGER" in str(r.json().get("role"))
 
-def test_manager_cannot_assign_admin(client, manager_user, user):
+async def test_manager_cannot_assign_admin(async_client, manager_token, user):
     """MANAGER cannot assign ADMIN to anyone."""
-    headers = _auth_headers(client, manager_user.email, PASSWORD)
-    r = client.patch(f"/users/{user.id}/role", json={"role": "ADMIN"}, headers=headers)
+    r = await async_client.patch(
+        f"/users/{user.id}/role",
+        json={"role": "ADMIN"},
+        headers=_headers(manager_token),
+    )
     assert r.status_code == 403
 
-def test_manager_cannot_change_admin_user(client, manager_user, admin_user):
+async def test_manager_cannot_change_admin_user(async_client, manager_token, admin_user):
     """MANAGER cannot change an ADMIN user's role at all."""
-    headers = _auth_headers(client, manager_user.email, PASSWORD)
-    r = client.patch(f"/users/{admin_user.id}/role", json={"role": "MANAGER"}, headers=headers)
+    r = await async_client.patch(
+        f"/users/{admin_user.id}/role",
+        json={"role": "MANAGER"},
+        headers=_headers(manager_token),
+    )
     assert r.status_code == 403
 
-def test_noop_same_role_returns_200(client, admin_user, user):
+async def test_noop_same_role_returns_200(async_client, admin_token, user):
     """Setting the same role again should be a no-op but still 200."""
-    headers = _auth_headers(client, admin_user.email, PASSWORD)
     # first change to MANAGER
-    r1 = client.patch(f"/users/{user.id}/role", json={"role": "MANAGER"}, headers=headers)
+    r1 = await async_client.patch(
+        f"/users/{user.id}/role",
+        json={"role": "MANAGER"},
+        headers=_headers(admin_token),
+    )
     assert r1.status_code == 200
     # same role again -> should still be 200 and unchanged
-    r2 = client.patch(f"/users/{user.id}/role", json={"role": "MANAGER"}, headers=headers)
+    r2 = await async_client.patch(
+        f"/users/{user.id}/role",
+        json={"role": "MANAGER"},
+        headers=_headers(admin_token),
+    )
     assert r2.status_code == 200
     assert "MANAGER" in str(r2.json().get("role"))
