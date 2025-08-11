@@ -35,3 +35,17 @@ class EmailService:
             "verification_url": verification_url,
             "email": user.email
         }, 'email_verification')
+
+    async def send_pro_upgrade_notice(self, user: User) -> None:
+        """
+        Notify the user they were upgraded to Professional.
+        """
+        subject = "You're now a Professional user 🎉"
+        body = (
+            f"Hi {user.first_name or 'there'},\n\n"
+            "Good news — your account has been upgraded to Professional.\n"
+            "You now have access to pro features immediately.\n\n"
+            "If you have any questions, just reply to this email.\n\n"
+            "— The Team"
+        )
+        await self.send_email(to=user.email, subject=subject, body=body)
