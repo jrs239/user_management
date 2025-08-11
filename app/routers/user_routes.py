@@ -25,8 +25,8 @@ from app.utils.link_generation import create_user_links, generate_pagination_lin
 from app.services.email_service import EmailService
 
 router = APIRouter()
-# Align tokenUrl with the actual path below ("/login")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+# Align tokenUrl with the actual path below ("/login/")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login/")
 settings = get_settings()
 
 
