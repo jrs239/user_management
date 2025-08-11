@@ -81,3 +81,18 @@ class UserListResponse(BaseModel):
     total: int = Field(..., example=100)
     page: int = Field(..., example=1)
     size: int = Field(..., example=10)
+
+class UserProfileUpdate(BaseModel):
+    first_name: Optional[str] = Field(None, max_length=100, example="John")
+    last_name: Optional[str] = Field(None, max_length=100, example="Doe")
+    bio: Optional[str] = Field(None, max_length=500, example="Experienced software developer specializing in web applications.")
+    location: Optional[str] = Field(None, max_length=120, example="Newark, NJ")
+
+    @root_validator(pre=True)
+    def check_at_least_one_value(cls, values):
+        if not any(values.values()):
+            raise ValueError("At least one field must be provided for profile update")
+        return values
+
+    class Config:
+        from_attributes = True
